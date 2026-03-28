@@ -9,9 +9,18 @@ from mutagen.flac import FLAC
 from mutagen.mp3 import EasyMP3
 
 import re
+import shutil
 from rich.console import Console
 from rich.table import Table
 from rich import box
+
+from prompt_toolkit import Application
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.filters import Condition
+from prompt_toolkit.layout.containers import Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout import Layout
+from prompt_toolkit.styles import Style
 
 console = Console()
 
@@ -40,7 +49,7 @@ def format_netease_lyrics(lrc):
 def save_lyrics(lrc, save_path):
     with open(save_path, 'w', encoding='utf-8') as f:
         f.write(lrc)
-    console.print(f"  [green]✅ Lyrics saved to[/green] [dim]{save_path.name}[/dim]")
+    console.print(f"  [green]✅ Saved[/green] [dim]{save_path.name}[/dim]")
     return lrc
 
 
@@ -91,7 +100,7 @@ def get_lyrics_for_album(album_path):
         return
 
     tracks = []
-    console.rule(f"[bold cyan]💿  {album_name}[/bold cyan]")
+    console.rule(f"[bold cyan]💿 {album_name}[/bold cyan]")
     console.print()
 
     for file_name in sorted(files):
@@ -137,7 +146,7 @@ def get_lyrics_for_album(album_path):
             remove_txt_if_exists(album_path / f"{file_name.stem}.txt")
 
     console.print()
-    table = Table(title=f"[bold]Summary — {album_name}[/bold]", box=box.ROUNDED, show_header=False, padding=(0, 1))
+    table = Table(title=f"[bold]{album_name}[/bold]", box=box.ROUNDED, show_header=False, padding=(0, 1))
     table.add_column("Icon", justify="center", width=3)
     table.add_column("Track")
 
@@ -149,8 +158,191 @@ def get_lyrics_for_album(album_path):
     console.print(table)
     console.print()
 
+def browse_directory(start_path):
+    """Interactive terminal directory browser. Returns selected Path or None."""
+    current_dir = [Path(start_path)]
+    selected_index = [0]
+    scroll_offset = [0]
+    result = [None]
+    filter_mode = [False]
+    filter_text = [""]
+
+    HEADER_ROWS = 3  # current path + blank line
+    FOOTER_ROWS = 2  # blank line + hint bar
+
+    def visible_rows():
+        return max(5, shutil.get_terminal_size().lines - HEADER_ROWS - FOOTER_ROWS)
+
+    def get_all_subdirs():
+        try:
+            return sorted(
+                [p for p in current_dir[0].iterdir() if p.is_dir()],
+                key=lambda p: p.name.lower(),
+            )
+        except PermissionError:
+            return []
+
+    def get_entries():
+        entries = []
+        if not filter_mode[0] and current_dir[0].parent != current_dir[0]:
+            entries.append(("..", current_dir[0].parent))
+        for p in get_all_subdirs():
+            if not filter_mode[0] or filter_text[0].lower() in p.name.lower():
+                entries.append((p.name, p))
+        return entries
+
+    def clamp_scroll(entries, rows):
+        n = len(entries)
+        if selected_index[0] < scroll_offset[0]:
+            scroll_offset[0] = selected_index[0]
+        elif selected_index[0] >= scroll_offset[0] + rows:
+            scroll_offset[0] = selected_index[0] - rows + 1
+        scroll_offset[0] = max(0, min(scroll_offset[0], max(0, n - rows)))
+
+    def render():
+        entries = get_entries()
+        rows = visible_rows()
+        clamp_scroll(entries, rows)
+        n = len(entries)
+        lines = [("class:header", f" {current_dir[0]}\n\n")]
+        visible = entries[scroll_offset[0]:scroll_offset[0] + rows]
+        for i_rel, (label, _) in enumerate(visible):
+            i_abs = i_rel + scroll_offset[0]
+            if label == "..":
+                display = "  ..  (go up)"
+            else:
+                display = f"  {label}/"
+            prefix = " > " if i_abs == selected_index[0] else "   "
+            style = "class:selected" if i_abs == selected_index[0] else ""
+            lines.append((style, f"{prefix}{display}\n"))
+        if n > rows:
+            pos = f"[{selected_index[0] + 1}/{n}]  "
+        else:
+            pos = ""
+        if filter_mode[0]:
+            lines.append(("class:footer", f"\n  /{filter_text[0]}  (↑↓ Move    Enter Select    Esc Cancel)"))
+        else:
+            lines.append(("class:footer", f"\n  {pos}↑↓←→ Move    Enter Select    / Filter    q Quit"))
+        return lines
+
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _(event):
+        if selected_index[0] > 0:
+            selected_index[0] -= 1
+        app.invalidate()
+
+    @kb.add("down")
+    def _(event):
+        if selected_index[0] < len(get_entries()) - 1:
+            selected_index[0] += 1
+        app.invalidate()
+
+    @kb.add("pageup")
+    def _(event):
+        selected_index[0] = max(0, selected_index[0] - visible_rows())
+        app.invalidate()
+
+    @kb.add("pagedown")
+    def _(event):
+        selected_index[0] = min(len(get_entries()) - 1, selected_index[0] + visible_rows())
+        app.invalidate()
+
+    @kb.add("enter")
+    def _(event):
+        entries = get_entries()
+        if not entries:
+            return
+        _, path = entries[selected_index[0]]
+        result[0] = path
+        app.exit()
+
+    @kb.add("right", filter=Condition(lambda: not filter_mode[0]))
+    def _(event):
+        entries = get_entries()
+        if not entries:
+            return
+        label, path = entries[selected_index[0]]
+        if label != "..":
+            current_dir[0] = path
+            selected_index[0] = 0
+            scroll_offset[0] = 0
+            filter_mode[0] = False
+            filter_text[0] = ""
+            app.invalidate()
+
+    @kb.add("left", filter=Condition(lambda: not filter_mode[0]))
+    def _(event):
+        if current_dir[0].parent != current_dir[0]:
+            current_dir[0] = current_dir[0].parent
+            selected_index[0] = 0
+            scroll_offset[0] = 0
+            filter_mode[0] = False
+            filter_text[0] = ""
+            app.invalidate()
+
+    @kb.add("/", filter=Condition(lambda: not filter_mode[0]))
+    def _(event):
+        filter_mode[0] = True
+        filter_text[0] = ""
+        selected_index[0] = 0
+        scroll_offset[0] = 0
+        app.invalidate()
+
+    @kb.add("escape", filter=Condition(lambda: filter_mode[0]))
+    def _(event):
+        filter_mode[0] = False
+        filter_text[0] = ""
+        selected_index[0] = 0
+        scroll_offset[0] = 0
+        app.invalidate()
+
+    @kb.add("backspace", filter=Condition(lambda: filter_mode[0]))
+    def _(event):
+        if filter_text[0]:
+            filter_text[0] = filter_text[0][:-1]
+            selected_index[0] = 0
+            scroll_offset[0] = 0
+        app.invalidate()
+
+    @kb.add("q", filter=Condition(lambda: not filter_mode[0]))
+    @kb.add("c-c")
+    def _(event):
+        app.exit()
+
+    @kb.add("<any>")
+    def _(event):
+        if filter_mode[0]:
+            key = event.key_sequence[0].key
+            if len(key) == 1 and key.isprintable():
+                filter_text[0] += key
+                selected_index[0] = 0
+                scroll_offset[0] = 0
+                app.invalidate()
+        app.invalidate()
+
+    control = FormattedTextControl(render, focusable=True)
+    layout = Layout(Window(content=control))
+    style = Style.from_dict({
+        "header": "bold cyan",
+        "selected": "bold white bg:#005faf",
+        "footer": "dim",
+    })
+
+    app = Application(layout=layout, key_bindings=kb, style=style, full_screen=True)
+    app.run()
+    return result[0]
+
+
 if __name__ == "__main__":
-    starting_path = Path(sys.argv[1])
+    start = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd()
+    starting_path = browse_directory(start)
+
+    if starting_path is None:
+        console.print("[yellow]No directory selected.[/yellow]")
+        sys.exit(0)
+
     get_lyrics_for_album(starting_path)
 
     for p in starting_path.iterdir():

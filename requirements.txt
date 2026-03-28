@@ -5,6 +5,7 @@ idna==3.7
 markdown-it-py==3.0.0
 mdurl==0.1.2
 mutagen==1.47.0
+prompt_toolkit
 pygments==2.19.2
 rapidfuzz==3.9.3
 requests==2.32.3
