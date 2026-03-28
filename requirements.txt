@@ -1,0 +1,16 @@
+beautifulsoup4==4.12.3
+certifi==2024.6.2
+charset-normalizer==3.3.2
+idna==3.7
+markdown-it-py==3.0.0
+mdurl==0.1.2
+mutagen==1.47.0
+pygments==2.19.2
+rapidfuzz==3.9.3
+requests==2.32.3
+rich==14.3.3
+soupsieve==2.5
+syncedlyrics==1.0.1
+tinytag==2.0.0
+urllib3==2.2.2
+zhconv==1.4.3
